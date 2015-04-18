@@ -14,7 +14,7 @@ int** pista;
 int d;
 int n;
 char* tipoVeloc;
-int atualVolta;
+//int atualVolta;
 sem_t mutex;
 int posInic[NUM_CICLISTA];
 /**********************************/
@@ -118,31 +118,8 @@ int proximaFaixaLivre(int proxPos){
 	return -1;
 }
 
-int tentaAvancarMetro(int posAtual){
-	int velAleatoria;
-
-	if(strcmp(tipoVeloc,"u")){			// velocidade 50km/h
-		sleep(72/1000);
-	}
-
-	else{
-		if(atualVolta == 0){					//velocidade 25km/h
-			sleep(144/1000);
-		}
-
-		else{
-            srand(time(NULL));
-			velAleatoria = rand() % 2;
-
-			if(velAleatoria == 0){		//velocidade 25km/h
-				sleep(144/1000);
-			}
-
-			else{						//velocidade 50km/h
-				sleep(72/1000);
-			}
-		}
-	}
+int tentaAvancarMetro(int posAtual, int speedRound){
+    sleep(speedRound/1000);
 
 	if(posAtual == d-1){
         return proximaFaixaLivre(0);
@@ -151,32 +128,69 @@ int tentaAvancarMetro(int posAtual){
     return proximaFaixaLivre(posAtual+1);
 }
 
+void configVelocidadeDaVolta(int volta, int* speedRound){
+    if(strcmp(tipoVeloc,"u")){  // velocidade 50km/h
+        *speedRound = 72;
+    }
+
+    else{
+        if(volta == 0){  //velocidade 25km/h
+            *speedRound = 144;
+        }
+
+        else {
+            srand(time(NULL));
+
+            if((rand() % 2) == 0)
+                *speedRound = 144;
+
+            else *speedRound = 72;
+        }
+    }
+}
+
 void *ciclista(void *a){
   int proxFaixa, numVolta;
   long ciclista_id = (long) a;
   int posAtual = posInic[ciclista_id];
+  int speedRound = 0;
+  int faixa = 0;
+
+  configVelocidadeDaVolta(0, &speedRound);
 
   for(numVolta = 0; numVolta < 5;){
-    sem_wait(&mutex);
+    //sem_wait(&mutex);
 
-    proxFaixa = tentaAvancarMetro(posAtual);
+    proxFaixa = tentaAvancarMetro(posAtual, speedRound);
 
     if(proxFaixa != -1){
         posAtual++;
 
+        sem_wait(&mutex);
+        removaIdPosicaoAntiga(posAtual-1, faixa);
+        sem_post(&mutex);
+
         if(posAtual == d){
             posAtual = 0;
             numVolta++;
+            configVelocidadeDaVolta(numVolta, &speedRound);
         }
+
+        sem_wait(&mutex);
+        adicioneIdPosicaoAtual(posAtual, proxFaixa, ciclista_id);
+        sem_post(&mutex);
+
+        faixa = proxFaixa;
     }
 
+
     /** preciso:
-        - chamar adiciona e remove ids na pista
-        - definir a velocidade para aquela volta do ciclista
+        - chamar adiciona e remove ids na pista - ok
+        - definir a velocidade para aquela volta do ciclista - ok
     **/
 
     printf("Thread: %ld;    # da Volta: %d;    Posicao: %d\n", ciclista_id, numVolta, posAtual);
-    sem_post(&mutex);
+    //sem_post(&mutex);
   }
 
   return NULL;
