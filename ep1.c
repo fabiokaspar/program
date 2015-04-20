@@ -8,11 +8,14 @@
 #define NUM_CICLISTA 100
 #define NITER 2
 
+pthread_barrier_t barrier[NUM_CICLISTA];
+
 /****** variaveis globais *********/
 
 int** pista;
 int d;
-int n;
+int n, n_barr;
+int voltaDoLider, idDoLider;
 char* tipoVeloc;
 //int atualVolta;
 sem_t mutex;
@@ -24,12 +27,20 @@ int parserEntrada(int argc, char** argv){
 		printf("Erro na quantidade de parametros!\n");
 		printf("Entrada: ./ep1 d n [u|v]\n");
 
-		return 1;
+        exit(1);
 	}
 	else{
 		d = atoi(argv[1]);
-		n = atoi(argv[2]);
-		tipoVeloc = argv[3];
+		n_barr = n = atoi(argv[2]);
+
+		if(!(tipoVeloc = malloc(2))){
+            printf("\n  ERROR allocation memory!\n");
+            exit(1);
+		}
+
+		//tipoVeloc = argv[3];
+        tipoVeloc[0] = 'u';
+        tipoVeloc[1] = '\0';
 
 		if((d % 2 == 0 && n > d/2) || (d % 2 == 1 && n > d/2 + 1)){
             printf("Número máximo de ciclistas deve ser: ⌈d/2⌉\n");
@@ -72,38 +83,41 @@ void imprimePista(){
 
 /**********************************/
 
-void geraPosIniCiclista(int ciclista_id){
-    int posInicial;
-
-    srand(time(NULL));
-    posInicial = (rand() % d);
-
-    while(pista[posInicial][0] != -1) {
-        srand(time(NULL));
-        posInicial = (rand() % d);
-    }
-
-    pista[posInicial][0] = ciclista_id;
-    posInic[ciclista_id] = posInicial;
-}
 
 void geraLargada(){
-	int i;
+	int i, num1, num2, aux;
 
-	for(i = 0; i < n; i++){
-		geraPosIniCiclista(i);
+	srand(time(NULL));
+
+	for(i = 0; i < n; i++)
+		pista[i][0] = i;
+
+	for(i = 0; i < 2*n; i++){
+		num1 = (rand()%n);
+		num2 = (rand()%n);
+
+		aux = pista[num1][0];
+		pista[num1][0] = pista[num2][0];
+		pista[num2][0] = aux;
 	}
+
+	for(i = 0; i < n; i++)
+        posInic[pista[i][0]] = i;
 }
 
 
 /************ a partir daqui não funciona, precisamos pensar ***********/
 
 void adicioneIdPosicaoAtual(int posAtual, int faixaAtual, int idCiclista){
+	//sem_wait(&mutex);
 	pista[posAtual][faixaAtual] = idCiclista;
+	//sem_post(&mutex);
 }
 
 void removaIdPosicaoAntiga(int posAnt, int faixaAnt){
+    //sem_wait(&mutex);
 	pista[posAnt][faixaAnt] = -1;
+	//sem_post(&mutex);
 }
 
 // retorna a primeira faixa livre da proxima posição ou -1 c.c
@@ -111,6 +125,7 @@ int proximaFaixaLivre(int proxPos){
 	int j;
 
 	for(j = 0; j < 4; j++){
+        // condição respeita a PNMUV => atomico
 		if(pista[proxPos][j] == -1)
             return j;
 	}
@@ -119,79 +134,109 @@ int proximaFaixaLivre(int proxPos){
 }
 
 int tentaAvancarMetro(int posAtual, int speedRound){
-    sleep(speedRound/1000);
+    int free;
 
 	if(posAtual == d-1){
-        return proximaFaixaLivre(0);
+        free = proximaFaixaLivre(0);
 	}
 
-    return proximaFaixaLivre(posAtual+1);
-}
+    else free = proximaFaixaLivre(posAtual+1);
 
-void configVelocidadeDaVolta(int volta, int* speedRound){
-    if(strcmp(tipoVeloc,"u")){  // velocidade 50km/h
-        *speedRound = 72;
+    if(free != -1){
+        usleep(speedRound);
     }
 
-    else{
+    return free;
+}
+
+int configVelocidadeDaVolta(int volta){
+    if(strcmp(tipoVeloc, "u") == 0){  // velocidade 50km/h
+        //*speedRound = 72000;
+        return 72000;
+    }
+
+    else {
         if(volta == 0){  //velocidade 25km/h
-            *speedRound = 144;
+            //*speedRound = 144000;
+            return 144000;
         }
 
         else {
             srand(time(NULL));
 
-            if((rand() % 2) == 0)
-                *speedRound = 144;
+            if((rand() % 2) == 0){
+                //*speedRound = 144000;
+                return 144000;
+            }
 
-            else *speedRound = 72;
+            else{
+               // *speedRound = 72000;
+               return 72000;
+            }
         }
     }
+
+    return 144000;
 }
 
 void *ciclista(void *a){
-  int proxFaixa, numVolta;
+  int proxFaixa;
+  int volta;
   long ciclista_id = (long) a;
   int posAtual = posInic[ciclista_id];
   int speedRound = 0;
   int faixa = 0;
+  int passo;
 
-  configVelocidadeDaVolta(0, &speedRound);
+  speedRound = configVelocidadeDaVolta(0);
 
-  for(numVolta = 0; numVolta < 5;){
-    //sem_wait(&mutex);
-
+  for(passo = 0, volta = 0; volta < 4; passo++) {
     proxFaixa = tentaAvancarMetro(posAtual, speedRound);
+
+    if(ciclista_id == 0)
+        printf("\n");
+
+    /** pra dar tempo da thread terminante atualizar pista e n_barr **/
+    usleep(100000);
+
+    pthread_barrier_wait(&barrier[n_barr-1]);
+
+   // printf("Barr: %d\n", n_barr);
 
     if(proxFaixa != -1){
         posAtual++;
 
         sem_wait(&mutex);
         removaIdPosicaoAntiga(posAtual-1, faixa);
+        adicioneIdPosicaoAtual(posAtual%d, proxFaixa, ciclista_id);
         sem_post(&mutex);
 
         if(posAtual == d){
             posAtual = 0;
-            numVolta++;
-            configVelocidadeDaVolta(numVolta, &speedRound);
+            volta++;
+            speedRound = configVelocidadeDaVolta(volta);
         }
-
-        sem_wait(&mutex);
-        adicioneIdPosicaoAtual(posAtual, proxFaixa, ciclista_id);
-        sem_post(&mutex);
 
         faixa = proxFaixa;
     }
 
+    printf("Thread: %ld; #Rodada: %d;   #Volta: %d;  Pos: %d\n", ciclista_id, passo, volta, posAtual);
 
     /** preciso:
         - chamar adiciona e remove ids na pista - ok
         - definir a velocidade para aquela volta do ciclista - ok
+        - definir quando a thread termina (fim da corrida)
     **/
 
-    printf("Thread: %ld;    # da Volta: %d;    Posicao: %d\n", ciclista_id, numVolta, posAtual);
-    //sem_post(&mutex);
+    //imprimePista();
   }
+
+  printf("> FIM THREAD: %ld\n", ciclista_id);
+
+  sem_wait(&mutex);
+  removaIdPosicaoAntiga(0, proxFaixa);
+  n_barr--;
+  sem_post(&mutex);
 
   return NULL;
 }
@@ -199,34 +244,48 @@ void *ciclista(void *a){
 int main(int argc, char** argv)
 {
     long i;
-    pthread_t corredores[NUM_CICLISTA];
-
-	parserEntrada(argc, argv);
+    parserEntrada(argc, argv);
+    pthread_t corredores[n];
 	criaPista();
 	geraLargada();
+
 	imprimePista();
 	printf("\n--------------------------------\n");
 
-	if(sem_init(&mutex,0,1)){
-        printf("Erro ao criar o semáforo :(\n");
+	voltaDoLider = 0;
+
+    for(i = 0; i < n_barr; i++){
+        if(pthread_barrier_init(&barrier[i], NULL, i+1)){
+            printf("\n ERROR initializing barrier %ld\n", i);
+            exit(1);
+        }
+    }
+
+	if(sem_init(&mutex, 0, 1)){
+        printf("\n ERROR creating semaphore\n");
         return(2);
     }
 
     for(i = 0; i < n; i++){
         if(pthread_create(&corredores[i], NULL, ciclista, (void *) i)){
-            printf("\n ERROR creating thread %ld", i);
+            printf("\n ERROR creating thread %ld\n", i);
             exit(1);
         }
     }
 
     for(i = 0; i < n; i++){
         if(pthread_join(corredores[i], NULL)){
-            printf("\n ERROR joining thread");
+            printf("\n ERROR joining thread\n");
             exit(1);
         }
     }
 
-    pthread_exit(NULL);
+   /* if(pthread_barrier_destroy(&barrier)) {
+        printf("\n ERROR destroying barrier\n");
+        exit(1);
+    } */
+
+   // pthread_exit(NULL);
 
 	return 0;
 }
