@@ -29,25 +29,18 @@ int parserEntrada(int argc, char** argv){
 
         exit(1);
 	}
+
 	else{
 		d = atoi(argv[1]);
 		n_barr = n = atoi(argv[2]);
-
-		if(!(tipoVeloc = malloc(2))){
-            printf("\n  ERROR allocation memory!\n");
-            exit(1);
-		}
-
-		//tipoVeloc = argv[3];
-        tipoVeloc[0] = 'u';
-        tipoVeloc[1] = '\0';
+		tipoVeloc = argv[3];
 
 		if((d % 2 == 0 && n > d/2) || (d % 2 == 1 && n > d/2 + 1)){
             printf("Número máximo de ciclistas deve ser: ⌈d/2⌉\n");
             exit(0);
 		}
 
-		printf("%d %d %s\n\n", d,n, tipoVeloc);
+		printf("%d %d %s\n\n", d, n, tipoVeloc);
 
 		return 1;
 	}
@@ -75,7 +68,7 @@ void imprimePista(){
 
 	for(i = 0; i < d; i++){
 		for(j = 0; j < 4; j++){
-			printf("%d   ", pista[i][j]);
+			printf("%02d   ", pista[i][j]);
 		}
 		printf("\n");
 	}
@@ -105,59 +98,80 @@ void geraLargada(){
         posInic[pista[i][0]] = i;
 }
 
-
-/************ a partir daqui não funciona, precisamos pensar ***********/
-
 void adicioneIdPosicaoAtual(int posAtual, int faixaAtual, int idCiclista){
-	//sem_wait(&mutex);
 	pista[posAtual][faixaAtual] = idCiclista;
-	//sem_post(&mutex);
 }
 
 void removaIdPosicaoAntiga(int posAnt, int faixaAnt){
-    //sem_wait(&mutex);
 	pista[posAnt][faixaAnt] = -1;
-	//sem_post(&mutex);
 }
 
-// retorna a primeira faixa livre da proxima posição ou -1 c.c
+/// retorna a primeira faixa livre da proxima posição ou -1 c.c
 int proximaFaixaLivre(int proxPos){
 	int j;
 
 	for(j = 0; j < 4; j++){
         // condição respeita a PNMUV => atomico
-		if(pista[proxPos][j] == -1)
+		if(pista[proxPos][j] == -1){
             return j;
+		}
 	}
 
+    /// não tem posição vazia (faixa livre)
 	return -1;
 }
 
-int tentaAvancarMetro(int posAtual, int speedRound){
-    int free;
 
-	if(posAtual == d-1){
-        free = proximaFaixaLivre(0);
-	}
-
-    else free = proximaFaixaLivre(posAtual+1);
-
-    if(free != -1){
-        usleep(speedRound);
+/*  Retorna -2 se *speedRound == 144000,
+    senão se *speedRound == 72000, retorna -1 se não tiver faixa livre ou devolve
+    faixa livre */
+int tentaAvancarMetro(int* flag_slow, int posAtual, int* speedRound){
+    /// dorme 72ms, diminui seu tempo e continua onde está
+    if(*speedRound == 144000){
+        usleep(72000);
+        *speedRound = 72000;
+        *flag_slow = 1;
+        return -2;
     }
 
-    return free;
+    else if(*speedRound == 72000){
+        int free = -1;
+
+        if(posAtual == d-1){
+            sem_wait(&mutex);
+            free = proximaFaixaLivre(0);
+            sem_post(&mutex);
+        }
+
+        else{
+            sem_wait(&mutex);
+            free = proximaFaixaLivre(posAtual+1);
+            sem_post(&mutex);
+        }
+
+        if(free != -1){
+            usleep(72000);
+        }
+
+        /// volta para a velocidade 25km/h pré-definida
+        if(*flag_slow){
+            *flag_slow = 0;
+            *speedRound = 144000;
+        }
+
+        return free;
+    }
+
+    return 0;
 }
 
 int configVelocidadeDaVolta(int volta){
     if(strcmp(tipoVeloc, "u") == 0){  // velocidade 50km/h
-        //*speedRound = 72000;
         return 72000;
     }
 
-    else {
+    else if(strcmp(tipoVeloc, "v") == 0) {
         if(volta == 0){  //velocidade 25km/h
-            //*speedRound = 144000;
             return 144000;
         }
 
@@ -165,33 +179,28 @@ int configVelocidadeDaVolta(int volta){
             srand(time(NULL));
 
             if((rand() % 2) == 0){
-                //*speedRound = 144000;
                 return 144000;
             }
 
             else{
-               // *speedRound = 72000;
                return 72000;
             }
         }
     }
 
-    return 144000;
+    return 0;
 }
 
 void *ciclista(void *a){
-  int proxFaixa;
-  int volta;
+  int proxFaixa, volta;
   long ciclista_id = (long) a;
-  int posAtual = posInic[ciclista_id];
-  int speedRound = 0;
-  int faixa = 0;
-  int passo;
+  int posAtual = posInic[ciclista_id], speedRound = 0, faixa = 0, passo, slow = 0;
 
   speedRound = configVelocidadeDaVolta(0);
 
   for(passo = 0, volta = 0; volta < 4; passo++) {
-    proxFaixa = tentaAvancarMetro(posAtual, speedRound);
+
+    proxFaixa = tentaAvancarMetro(&slow, posAtual, &speedRound);
 
     if(ciclista_id == 0)
         printf("\n");
@@ -201,9 +210,7 @@ void *ciclista(void *a){
 
     pthread_barrier_wait(&barrier[n_barr-1]);
 
-   // printf("Barr: %d\n", n_barr);
-
-    if(proxFaixa != -1){
+    if(proxFaixa > -1){
         posAtual++;
 
         sem_wait(&mutex);
@@ -218,17 +225,25 @@ void *ciclista(void *a){
         }
 
         faixa = proxFaixa;
+
+        printf(":) Thread: %ld;  #Volta: %d;  #Rodada: %d;  Pos: %.1fm;  Faixa: %d;  Time: %dms; [Avançou]\n",
+                ciclista_id, volta, passo, (float)posAtual, faixa, speedRound);
     }
 
-    printf("Thread: %ld; #Rodada: %d;   #Volta: %d;  Pos: %d\n", ciclista_id, passo, volta, posAtual);
+    if(proxFaixa == -1){
+        printf(":( Thread: %ld;  #Volta: %d;  #Rodada: %d;  Pos: %.1fm;  Faixa: %d;  Time: %dms; [Brecada]\n",
+                ciclista_id, volta, passo, (float)posAtual, faixa, speedRound);
+    }
+
+    if(proxFaixa == -2){
+        printf("*  Thread: %ld;  #Volta: %d;  #Rodada: %d;  Pos: %.1fm;  Faixa: %d;  Time: %dms; [Lenta]\n",
+                ciclista_id, volta, passo, posAtual+0.5, faixa, 144000);
+    }
 
     /** preciso:
         - chamar adiciona e remove ids na pista - ok
         - definir a velocidade para aquela volta do ciclista - ok
-        - definir quando a thread termina (fim da corrida)
-    **/
-
-    //imprimePista();
+        - definir quando a thread termina (fim da corrida **/
   }
 
   printf("> FIM THREAD: %ld\n", ciclista_id);
@@ -249,8 +264,9 @@ int main(int argc, char** argv)
 	criaPista();
 	geraLargada();
 
+    printf("--------------- INICIO -----------------\n");
 	imprimePista();
-	printf("\n--------------------------------\n");
+	printf("----------------------------------------\n");
 
 	voltaDoLider = 0;
 
@@ -280,12 +296,7 @@ int main(int argc, char** argv)
         }
     }
 
-   /* if(pthread_barrier_destroy(&barrier)) {
-        printf("\n ERROR destroying barrier\n");
-        exit(1);
-    } */
-
-   // pthread_exit(NULL);
+    pthread_exit(NULL);
 
 	return 0;
 }
